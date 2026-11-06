@@ -1,8 +1,10 @@
 # Dividend Drive
 
-A turn-based board game you play in your browser: buy shops, invest in them, trade district stocks and collect dividends. The first player to reach the bank with the target net worth wins.
+**▶ [Play it in your browser](https://psyga315.github.io/dividend-drive/)** (nothing to install)
 
-![Dividend Drive Gameplay](docs/Dividend Drive.png)
+[![Deploy to GitHub Pages](https://github.com/Psyga315/dividend-drive/actions/workflows/deploy.yml/badge.svg)](https://github.com/Psyga315/dividend-drive/actions/workflows/deploy.yml)
+
+A turn-based board game you play in your browser: buy shops, invest in them, trade district stocks and collect dividends. The first player to reach the bank with the target net worth wins.
 
 ## Features
 
@@ -49,6 +51,8 @@ npm run dev
 ```
 
 The game opens at http://127.0.0.1:5173.
+
+The online version updates automatically: every push to `main` runs the type check and tests, builds the game, and publishes it with GitHub Pages (see `.github/workflows/deploy.yml`).
 
 ## Commands
 - `npm run dev`, Builds and serves the game, and reloads the page when you save a file |
