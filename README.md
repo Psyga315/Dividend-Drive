@@ -2,8 +2,6 @@
 
 A turn-based board game you play in your browser: buy shops, invest in them, trade district stocks and collect dividends. The first player to reach the bank with the target net worth wins.
 
-![Dividend Drive screenshot](docs/Dividend Drive.png)
-
 ## Features
 
 - 2–4 players on one computer, any mix of humans and bots
