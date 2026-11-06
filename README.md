@@ -50,20 +50,16 @@ npm run dev
 
 The game opens at http://127.0.0.1:5173.
 
+## Commands
+- `npm run dev`, Builds and serves the game, and reloads the page when you save a file |
 
-| Command | What it does |
+- `npm test` , Runs the tests |
 
-|---|---|
+- `npm run typecheck`, Checks the TypeScript for errors |
 
-| `npm run dev` | Builds and serves the game, and reloads the page when you save a file |
+- `npm run sim`, Plays 1,000 bot games and prints balance statistics (`node scripts/simulate.ts --log` prints one full game) |
 
-| `npm test` | Runs the tests |
-
-| `npm run typecheck` | Checks the TypeScript for errors |
-
-| `npm run sim` | Plays 1,000 bot games and prints balance statistics (`node scripts/simulate.ts --log` prints one full game) |
-
-| `npm run build:web` | Builds the game into `web/` as static files for any web host |
+- `npm run build:web`, Builds the game into `web/` as static files for any web host |
 
 ## How it's built
 
