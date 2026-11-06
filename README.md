@@ -6,7 +6,7 @@ A turn-based board game you play in your browser: buy shops, invest in them, tra
 
 
 
-!\[Dividend Drive screenshot](docs/screenshot.png)
+!\[Dividend Drive screenshot](docs/Dividend Drive.png)
 
 
 
