@@ -55,15 +55,17 @@ The game opens at http://127.0.0.1:5173.
 The online version updates automatically: every push to `main` runs the type check and tests, builds the game, and publishes it with GitHub Pages (see `.github/workflows/deploy.yml`).
 
 ## Commands
-- `npm run dev`, Builds and serves the game, and reloads the page when you save a file |
+- `npm run dev`, Builds and serves the game, and reloads the page when you save a file
 
-- `npm test` , Runs the tests |
+- `npm test` , Runs the tests
 
-- `npm run typecheck`, Checks the TypeScript for errors |
+- `npm run typecheck`, Checks the TypeScript for errors
 
-- `npm run sim`, Plays 1,000 bot games and prints balance statistics (`node scripts/simulate.ts --log` prints one full game) |
+- `npm run sim`, Plays 1,000 bot games and prints balance statistics (`node scripts/simulate.ts --log` prints one full game)
 
-- `npm run build:web`, Builds the game into `web/` as static files for any web host |
+- `npm run build:web`, Builds the game into `web/` as static files for any web host
+
+-  `npm run server`, Runs the game server for online play (see "Playing online")
 
 ## How it's built
 
@@ -78,6 +80,27 @@ Plain TypeScript, with no frameworks and no runtime dependencies.
 - `src/boards/`: board layouts
 
 - `tests/`: rule tests, random stress tests, and UI tests that click through whole games
+
+## Playing online
+
+Online games run on a small game server that comes with the project. The host runs it; everyone else just opens the invite link. (The GitHub Pages copy can't host online games, because it only serves files.)
+
+**Try it on one computer:** run `npm run dev`, open http://127.0.0.1:5173 in a normal window and in a private window, and click **Play online with friends** in both.
+
+**Same home network:**
+1. Run `npm run server`.
+2. Open the "On your network" address it prints (for example `http://192.168.1.20:8080`). If Windows Firewall asks about Node.js, allow it on private networks.
+3. Click **Play online with friends**, then **Create a room**, and send the invite link.
+
+**Over the internet** (free, no account), with a Cloudflare quick tunnel:
+1. Install it once: `winget install --id Cloudflare.cloudflared`
+2. In one window run `npm run server`; in a second window run `cloudflared tunnel --url http://127.0.0.1:8080`.
+3. Open the `https://….trycloudflare.com` address the tunnel prints (not localhost, so your invite links use it), create a room, and send the link. The address changes each time you start the tunnel.
+
+Good to know:
+- The server runs the real game. Browsers never see the dice seed, the venture deck or sealed auction bids.
+- Rooms live in the server's memory. Stopping the server ends every game, and rooms with nobody connected close after 2 hours.
+- If a player drops out, the game waits for them, and anyone can let a bot play their turns until they're back. Reopening the invite link puts you back in your seat.
 
 ## Credits
 
