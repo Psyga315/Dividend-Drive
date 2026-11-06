@@ -5,9 +5,11 @@ import {
   type ActionPrompt, type Choice, type GameState, type PlayerId, type SquareDef, type SquareId,
 } from '../engine/index.ts';
 import { SUIT_SYMBOLS, be, gold, isYou, possessive, shares, verbS } from '../describe.ts';
-import { GAME_LENGTHS, GAME_TITLE, SEAT_KINDS, currentPrompt, isHuman, type AppState, type SeatKind } from './app.ts';
+import type { SeatView } from '../online/protocol.ts';
+import { GAME_LENGTHS, GAME_TITLE, SEAT_KINDS, canAct, currentPrompt, isHuman, type AppState, type SeatKind } from './app.ts';
 import { PLAYER_COLORS, districtColor, renderBoard } from './board-view.ts';
 import { actAttr, esc, numberInput, uiAttr } from './html.ts';
+import type { ConnectionStatus } from './online.ts';
 
 // ---------- Setup screen ----------
 
@@ -34,6 +36,7 @@ export function renderSetup(): string {
 <div class="setup">
   <h1>${esc(GAME_TITLE)}</h1>
   <p class="muted">Buy shops, invest in them, trade district stocks, and be first back to the bank with the target net worth.</p>
+  <div class="mode-switch"><span class="current">On this computer</span><button ${uiAttr({ cmd: 'goOnline' })}>Play online with friends →</button></div>
   <h2>Players</h2>
   ${rows}
   <p class="muted small">Players take turns on this computer. Seat colors follow the turn order once the game starts.</p>
@@ -49,8 +52,16 @@ export function renderSetup(): string {
 
 // ---------- Game screen ----------
 
+/** Extra information for online games. */
+export interface OnlineInfo {
+  code: string;
+  status: ConnectionStatus;
+  seats: SeatView[]; // index = player id
+}
+
 export interface GameViewOptions {
   speedMs: number;
+  online?: OnlineInfo;
 }
 
 export const SPEEDS = [
@@ -64,17 +75,20 @@ export function renderGame(app: AppState, opts: GameViewOptions): string {
   const s = app.game;
   const prompt = currentPrompt(app);
   const destinations = new Set<SquareId>();
-  if (prompt && isHuman(app, prompt.player) && s.phase.kind === 'move') {
+  if (prompt && canAct(app, prompt.player) && s.phase.kind === 'move') {
     for (const c of prompt.choices) if (c.type === 'move') destinations.add(c.path[c.path.length - 1]);
   }
-  const speedOptions = SPEEDS.map((sp) => `<option value="${sp.ms}"${sp.ms === opts.speedMs ? ' selected' : ''}>${sp.label}</option>`).join('');
+  const online = opts.online;
+  const controls = online
+    ? `<span class="room-tag">Room <b>${esc(online.code)}</b></span>${connectionBadge(online.status)}<button ${uiAttr({ cmd: 'exitGame' })}>Leave</button>`
+    : `<label class="small">Bot speed <select id="speed">${SPEEDS.map((sp) => `<option value="${sp.ms}"${sp.ms === opts.speedMs ? ' selected' : ''}>${sp.label}</option>`).join('')}</select></label>
+  <button ${uiAttr({ cmd: 'newGame' })}>New game</button>`;
   return `
 <header class="topbar">
   <strong>${esc(GAME_TITLE)}</strong>
   <span class="status">${statusLine(app)}</span>
   <span class="spacer"></span>
-  <label class="small">Bot speed <select id="speed">${speedOptions}</select></label>
-  <button ${uiAttr({ cmd: 'newGame' })}>New game</button>
+  ${controls}
 </header>
 <main class="layout">
   <section class="board-area">${renderBoard(s, { destinations, selected: app.selected })}</section>
@@ -83,11 +97,16 @@ export function renderGame(app: AppState, opts: GameViewOptions): string {
     <div class="panel log"><h3>Log</h3>${logList(app.log)}</div>
   </section>
   <aside class="side">
-    <div class="players">${s.players.map((_, i) => playerCard(app, i)).join('')}</div>
-    <div class="panel action">${app.error ? errorBox(app.error) : ''}${actionPanel(app, prompt)}</div>
+    <div class="players">${s.players.map((_, i) => playerCard(app, i, online)).join('')}</div>
+    <div class="panel action${prompt && canAct(app, prompt.player) ? ' your-move' : ''}">${app.error ? errorBox(app.error) : ''}${actionPanel(app, prompt, online)}</div>
     <div class="panel market"><h3>Stock market</h3>${marketTable(s)}</div>
   </aside>
 </main>`;
+}
+
+function connectionBadge(status: ConnectionStatus): string {
+  if (status === 'open') return '<span class="conn ok" title="Connected to the game server">● online</span>';
+  return '<span class="conn bad" title="Trying to reconnect">● reconnecting…</span>';
 }
 
 function statusLine(app: AppState): string {
@@ -95,7 +114,8 @@ function statusLine(app: AppState): string {
   if (s.phase.kind === 'gameOver') return 'Game over';
   const pl = s.players[s.turn.player];
   const rolled = s.turn.roll !== null ? ` · rolled ${s.turn.roll}` : '';
-  return `Round ${s.round} · ${esc(possessive(pl.name))} turn${rolled} · Target ${gold(s.config.targetNetWorth)}`;
+  const whose = app.viewer === s.turn.player ? 'Your' : possessive(pl.name);
+  return `Round ${s.round} · ${esc(whose)} turn${rolled} · Target ${gold(s.config.targetNetWorth)}`;
 }
 
 function errorBox(message: string): string {
@@ -104,7 +124,7 @@ function errorBox(message: string): string {
 
 // ---------- Player cards ----------
 
-function playerCard(app: AppState, p: PlayerId): string {
+function playerCard(app: AppState, p: PlayerId, online: OnlineInfo | undefined): string {
   const s = app.game;
   const pl = s.players[p];
   const worth = netWorth(s, p);
@@ -113,7 +133,14 @@ function playerCard(app: AppState, p: PlayerId): string {
   const kind = SEAT_KINDS.find((k) => k.kind === app.seats[p].kind)?.label.replace(/ \(.*\)/, '') ?? '';
   const suits = SUITS.map((suit) => `<span class="suit${pl.suits.includes(suit) ? ' have' : ''}${suit === 'heart' || suit === 'diamond' ? ' red' : ''}">${SUIT_SYMBOLS[suit]}</span>`).join('');
   const wild = pl.wildcards > 0 ? ` <span class="badge">+${pl.wildcards} wild</span>` : '';
-  const flags = [pl.bankrupt ? '<span class="badge bad">BANKRUPT</span>' : '', pl.shopsClosed ? '<span class="badge">shops closed</span>' : ''].join('');
+  const seat = online?.seats[p];
+  const flags = [
+    app.viewer === p ? '<span class="badge you">you</span>' : '',
+    seat && seat.kind === 'human' && !seat.connected ? '<span class="badge offline">offline</span>' : '',
+    seat?.standIn ? '<span class="badge">bot playing</span>' : '',
+    pl.bankrupt ? '<span class="badge bad">BANKRUPT</span>' : '',
+    pl.shopsClosed ? '<span class="badge">shops closed</span>' : '',
+  ].join('');
   return `
 <div class="pcard${active ? ' active' : ''}${pl.bankrupt ? ' out' : ''}" style="--pc:${PLAYER_COLORS[p]}">
   <div class="pc-head"><span class="dot" style="background:${PLAYER_COLORS[p]}">${p + 1}</span> <strong>${esc(pl.name)}</strong> <span class="muted small">${esc(kind)} · level ${pl.level}</span>${flags}</div>
@@ -183,13 +210,28 @@ const pick = <T extends Choice['type']>(prompt: ActionPrompt, type: T): ChoiceOf
 const btn = (attr: string, label: string, cls = '') => `<button class="${cls}" ${attr}>${label}</button>`;
 const PASS_ATTR = actAttr({ type: 'pass' });
 
-function actionPanel(app: AppState, prompt: ActionPrompt | null): string {
+/** Shown when someone else must act: a bot, or (online) another person. */
+function waitingPanel(app: AppState, p: PlayerId, online: OnlineInfo | undefined): string {
+  const rawName = app.game.players[p].name;
+  const name = esc(rawName);
+  if (!isHuman(app, p)) return `<h3>${name} ${be(rawName)} thinking…</h3><p class="muted">Bots play automatically.${online ? '' : ' Change their speed at the top.'}</p>`;
+  const seat = online?.seats[p];
+  const auction = app.game.phase.kind === 'auction' ? ' Bids are sealed: nobody sees them until the auction ends.' : '';
+  if (seat && !seat.connected) {
+    if (seat.standIn) return `<h3>${name} is offline</h3><p class="muted">A bot is playing for ${name} until they come back.</p>`;
+    return `<h3>${name} is offline</h3><p class="muted">The game waits for them to reconnect. If they're gone for good, a bot can play their turns until they return.</p>
+${btn(uiAttr({ cmd: 'standIn', seat: p }), `Let a bot play for ${name}`, 'primary')}`;
+  }
+  return `<h3>Waiting for ${name}…</h3><p class="muted">${name} is deciding.${auction}</p>`;
+}
+
+function actionPanel(app: AppState, prompt: ActionPrompt | null, online: OnlineInfo | undefined): string {
   const s = app.game;
-  if (!prompt) return gameOverPanel(app);
+  if (!prompt) return gameOverPanel(app, online);
   const me = prompt.player;
+  if (!canAct(app, me)) return waitingPanel(app, me, online);
   const rawName = s.players[me].name;
   const name = esc(rawName);
-  if (!isHuman(app, me)) return `<h3>${name} ${be(rawName)} thinking…</h3><p class="muted">Bots play automatically. Change their speed at the top.</p>`;
   const ph = s.phase;
   switch (ph.kind) {
     case 'preRoll': {
@@ -198,7 +240,8 @@ function actionPanel(app: AppState, prompt: ActionPrompt | null): string {
 <details><summary>Sell stock before rolling</summary>
 ${sellTable(sells, (c) => Math.min(c.maxQty, s.config.largeTradeThreshold - 1))}
 <p class="muted small">Selling ${s.config.largeTradeThreshold}+ shares of one district in a turn lowers its price ${s.config.largeTradeStep}% at the end of the turn.</p></details>`;
-      return `<h3>${esc(possessive(rawName))} turn</h3>${btn(actAttr({ type: 'roll' }), 'Roll the die', 'primary big')}${sellBox}`;
+      const title = app.viewer === me ? 'Your turn' : `${esc(possessive(rawName))} turn`;
+      return `<h3>${title}</h3>${btn(actAttr({ type: 'roll' }), 'Roll the die', 'primary big')}${sellBox}`;
     }
     case 'move': {
       const routes = pick(prompt, 'move').map((c) => {
@@ -267,19 +310,21 @@ ${btn(PASS_ATTR, "Don't buy")}`;
       const sells = pick(prompt, 'sellStock');
       const shopRows = pick(prompt, 'sellShop').map((c) =>
         `<tr><td><b>${esc(shortLabel(s, c.square))}</b></td><td>${gold(s.shops[c.square].value)}</td><td>${gold(c.bankPays)}</td><td>${btn(actAttr({ type: 'sellShop', square: c.square }), 'Sell')}</td></tr>`).join('');
-      return `<h3>${name} ${be(rawName)} ${gold(debt)} in debt</h3>
+      const who = app.viewer === me ? 'You are' : `${name} ${be(rawName)}`;
+      return `<h3>${who} ${gold(debt)} in debt</h3>
 <p class="muted small">Raise cash until you're at 0G or more. Stock sells at full price. A shop sells to the bank for ${s.config.debtSaleRate}% of its value and is then auctioned to the other players.</p>
 ${sells.length ? `<h4>Sell stock</h4>${sellTable(sells, (c) => Math.min(c.maxQty, Math.ceil(debt / c.pricePerShare)))}` : ''}
 ${shopRows ? `<h4>Sell a shop</h4><table class="form-table"><thead><tr><th>Shop</th><th>Value</th><th>Bank pays</th><th></th></tr></thead><tbody>${shopRows}</tbody></table>` : ''}`;
     }
     case 'auction': {
       const c = pick(prompt, 'bid')[0];
+      const who = app.viewer === me ? 'Place' : `${name}, place`;
       return `<h3>Auction: ${esc(shortLabel(s, ph.square))}</h3>
-<p>${name}, place a <b>sealed bid</b>. Minimum ${gold(c.min)} (the shop's value). Highest bid wins; ties go to the player later in turn order. The money goes to the bank.</p>
+<p>${who} a <b>sealed bid</b>. Minimum ${gold(c.min)} (the shop's value). Highest bid wins; ties go to the player later in turn order. The money goes to the bank.</p>
 <p>${numberInput('bid', c.min, c.max, c.min)} ${btn(actAttr({ type: 'bid', amount: 0 }, { id: 'bid', field: 'amount' }), 'Place bid', 'primary')} ${btn(PASS_ATTR, 'Pass')}</p>`;
     }
     case 'gameOver':
-      return gameOverPanel(app);
+      return gameOverPanel(app, online);
   }
 }
 
@@ -291,14 +336,20 @@ function sellTable(options: ChoiceOf<'sellStock'>[], defaultQty: (c: ChoiceOf<'s
   return `<table class="form-table"><thead><tr><th>District</th><th>Price</th><th>You own</th><th>Shares</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
-function gameOverPanel(app: AppState): string {
+function gameOverPanel(app: AppState, online: OnlineInfo | undefined): string {
   const s = app.game;
   if (s.phase.kind !== 'gameOver') return '';
-  const winner = s.players[s.phase.winner].name;
+  const winnerId = s.phase.winner;
+  const winner = s.players[winnerId].name;
+  const youWon = app.viewer === winnerId || (app.viewer === null && isYou(winner));
   const why = { target: 'reached the target net worth at the bank', bankruptcy: 'had the highest net worth when a player went bankrupt', maxRounds: 'had the highest net worth when the round limit was reached' }[s.phase.reason];
   const rows = rankings(s).map((p, rank) => `<tr><td>${rank + 1}.</td><td><span class="dot" style="background:${PLAYER_COLORS[p]}">${p + 1}</span> ${esc(s.players[p].name)}</td><td><b>${gold(netWorth(s, p))}</b></td></tr>`).join('');
-  return `<h3>🏆 ${esc(winner)} ${verbS(winner, 'win')}!</h3><p>${isYou(winner) ? 'You' : 'They'} ${why}, in round ${s.round}.</p>
-<table class="form-table"><tbody>${rows}</tbody></table>${btn(uiAttr({ cmd: 'newGame' }), 'New game', 'primary')}`;
+  const title = youWon ? '🏆 You win!' : `🏆 ${esc(winner)} ${verbS(winner, 'win')}!`;
+  const next = online
+    ? btn(uiAttr({ cmd: 'backToLobby' }), 'Back to the room', 'primary') + '<p class="muted small">Everyone goes back to the room, where the host can start a rematch.</p>'
+    : btn(uiAttr({ cmd: 'newGame' }), 'New game', 'primary');
+  return `<h3>${title}</h3><p>${youWon ? 'You' : 'They'} ${why}, in round ${s.round}.</p>
+<table class="form-table"><tbody>${rows}</tbody></table>${next}`;
 }
 
 // ---------- Info panel (the selected square) ----------

@@ -5,7 +5,9 @@ import { makeRandom, type ActionBody, type BoardDef, type Choice } from '../src/
 import { describeEvent } from '../src/describe.ts';
 import { applyAction, botStep, clickSquare, currentPrompt, fromSave, isBotTurn, startGame, toSave, type AppState, type GameSetup, type Seat } from '../src/ui/app.ts';
 import { clampAmount, withAmount, type AmountField, type UiCommand } from '../src/ui/html.ts';
-import { renderGame, renderSetup } from '../src/ui/view.ts';
+import { renderConnecting, renderLobby, renderOnlineHome } from '../src/ui/lobby-view.ts';
+import { renderGame, renderSetup, type OnlineInfo } from '../src/ui/view.ts';
+import { DEFAULT_ROOM_OPTIONS, type RoomView, type SeatView } from '../src/online/protocol.ts';
 
 // ---------- Reading rendered HTML ----------
 
@@ -217,4 +219,87 @@ test('the log shows the newest turn first, and each turn in the order it happene
   assert.equal(titles[0], `Round ${s.round}: ${s.players[s.turn.player].name}`);
   const previousTurn = log.split('class="turn-title"')[2];
   assert.ok(previousTurn.indexOf('rolled') < previousTurn.indexOf('moved'), 'lines within a turn should be in order');
+});
+
+// ---------- Online screens ----------
+
+const seatView = (name: string, kind: Seat['kind'] = 'human', connected = true, standIn = false): SeatView => ({ name, kind, connected, standIn });
+
+function lobbyView(you: number): RoomView {
+  return {
+    code: 'ABCDE', you, hostSeat: 0, step: 0, log: [], game: null,
+    seats: [seatView('Ada'), seatView('Ben', 'human', false), seatView('Cy', 'trader')],
+    options: { ...DEFAULT_ROOM_OPTIONS },
+  };
+}
+
+test('lobby: the host gets the controls, guests see what was chosen', () => {
+  const opts = { inviteUrl: 'https://example.com/?room=ABCDE', status: 'open' as const, copied: false, error: null };
+  const host = renderLobby(lobbyView(0), opts);
+  const cmds = clickables(host).map((c) => c.ui?.cmd);
+  for (const cmd of ['copyInvite', 'addBot', 'removeSeat', 'startOnline', 'leaveRoom']) assert.ok(cmds.includes(cmd as UiCommand['cmd']), cmd);
+  assert.match(host, /data-room-option="target"/);
+  assert.match(host, /value="https:\/\/example.com\/\?room=ABCDE"/);
+  assert.match(host, /offline/); // Ben isn't connected
+  assert.match(host, /Empty seat/);
+  const guest = renderLobby(lobbyView(1), opts);
+  const guestCmds = clickables(guest).map((c) => c.ui?.cmd);
+  assert.ok(!guestCmds.includes('startOnline') && !guestCmds.includes('addBot') && !guestCmds.includes('removeSeat'));
+  assert.doesNotMatch(guest, /data-room-option/);
+  assert.match(guest, /Waiting for the host/);
+});
+
+test('online home: no server, server found, and a room to rejoin', () => {
+  const base = { name: 'Ada', code: '', message: null, busy: false, savedRoom: null };
+  assert.match(renderOnlineHome({ ...base, serverOk: null }), /Looking for the game server/);
+  const none = renderOnlineHome({ ...base, serverOk: false });
+  assert.match(none, /isn't connected to one/);
+  assert.ok(!clickables(none).some((c) => c.ui?.cmd === 'createRoom'));
+  const ok = renderOnlineHome({ ...base, serverOk: true, savedRoom: 'QWERT', message: 'That room has closed.' });
+  const cmds = clickables(ok).map((c) => c.ui?.cmd);
+  for (const cmd of ['createRoom', 'joinRoom', 'rejoin', 'forgetRoom', 'goLocal']) assert.ok(cmds.includes(cmd as UiCommand['cmd']), cmd);
+  assert.match(ok, /QWERT/);
+  assert.match(ok, /That room has closed/);
+  assert.match(renderConnecting('reconnecting'), /Trying again/);
+});
+
+/** An online game as player `viewer` sees it. */
+function onlineGame(viewer: number, seatViews: SeatView[]): { app: AppState; info: OnlineInfo } {
+  const app = startGame({ seats: seatViews.map((s) => ({ name: s.name, kind: s.kind })), target: 8000, ventureCards: false, catchUpCash: true, randomOrder: false, seed: 4 });
+  return { app: { ...app, viewer }, info: { code: 'ABCDE', status: 'open', seats: seatViews } };
+}
+
+test('online game: you can only act on your own turn', () => {
+  const people = [seatView('Ada'), seatView('Ben')];
+  // Ben watching Ada's turn: no buttons, no glowing squares.
+  const ben = onlineGame(1, people);
+  ben.app = applyAction(ben.app, { type: 'roll' }); // Ada rolled; now she must move
+  const benHtml = renderGame(ben.app, { speedMs: 0, online: ben.info });
+  assert.match(benHtml, /Waiting for Ada/);
+  assert.ok(!clickables(benHtml).some((c) => c.body), "no game buttons on someone else's turn");
+  assert.doesNotMatch(benHtml, /class="sq [^"]*dest/);
+  assert.match(benHtml, /Room <b>ABCDE<\/b>/);
+  assert.doesNotMatch(benHtml, /id="speed"/); // the server sets the bot speed online
+  assert.equal(clickSquare(ben.app, ben.app.game.players[0].position).game, ben.app.game); // clicking the board doesn't move Ada
+  // Ada sees her own move.
+  const ada = { ...ben.app, viewer: 0 };
+  const adaHtml = renderGame(ada, { speedMs: 0, online: ben.info });
+  assert.ok(clickables(adaHtml).some((c) => c.body?.type === 'move'));
+  assert.match(adaHtml, /class="sq [^"]*dest/);
+  assert.match(adaHtml, /Your turn/);
+});
+
+test('online game: offline players can get a bot stand-in; game over goes back to the room', () => {
+  const offline = onlineGame(1, [seatView('Ada', 'human', false), seatView('Ben')]);
+  const html = renderGame(offline.app, { speedMs: 0, online: offline.info });
+  assert.match(html, /Ada is offline/);
+  assert.ok(clickables(html).some((c) => c.ui?.cmd === 'standIn' && c.ui.seat === 0));
+  const covered = onlineGame(1, [seatView('Ada', 'human', false, true), seatView('Ben')]);
+  assert.match(renderGame(covered.app, { speedMs: 0, online: covered.info }), /A bot is playing for Ada/);
+  const over = onlineGame(1, [seatView('Ada'), seatView('Ben')]);
+  over.app.game.phase = { kind: 'gameOver', winner: 1, reason: 'target' };
+  const end = renderGame(over.app, { speedMs: 0, online: over.info });
+  assert.match(end, /You win!/);
+  assert.ok(clickables(end).some((c) => c.ui?.cmd === 'backToLobby'));
+  assert.ok(!clickables(end).some((c) => c.ui?.cmd === 'newGame'));
 });

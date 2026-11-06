@@ -1,4 +1,5 @@
 // The app's state and everything that changes it. No DOM code here, so it can be tested in Node.
+// The game server (src/server) reuses startGame and applyAction, so online games follow the same code.
 import {
   IllegalActionError, createGame, legalActions, step,
   type ActionBody, type ActionPrompt, type BoardDef, type GameState, type PlayerId, type SquareId,
@@ -11,6 +12,7 @@ export const GAME_TITLE = 'Dividend Drive';
 
 export type BotKind = 'balanced' | 'landlord' | 'trader' | 'random';
 export type SeatKind = 'human' | BotKind;
+export const BOT_KINDS: readonly BotKind[] = ['balanced', 'trader', 'landlord', 'random'];
 
 export interface Seat {
   name: string;
@@ -49,6 +51,8 @@ export interface AppState {
   selected: SquareId | null; // square shown in the info panel
   routeFor: SquareId | null; // destination clicked that has several routes
   error: string | null;
+  /** Online: the one player this screen plays for. null = local play (every human seat is at this computer). */
+  viewer: PlayerId | null;
 }
 
 const MAX_LOG = 400;
@@ -81,6 +85,7 @@ export function startGame(setup: GameSetup, rand: () => number = Math.random): A
     selected: null,
     routeFor: null,
     error: null,
+    viewer: null,
   };
 }
 
@@ -91,6 +96,11 @@ export function currentPrompt(app: AppState): ActionPrompt | null {
 
 export function isHuman(app: AppState, p: PlayerId): boolean {
   return app.seats[p].kind === 'human';
+}
+
+/** May this screen act for player p? (Locally: any human. Online: only your own seat.) */
+export function canAct(app: AppState, p: PlayerId): boolean {
+  return isHuman(app, p) && (app.viewer === null || app.viewer === p);
 }
 
 export function isBotTurn(app: AppState): boolean {
@@ -120,19 +130,30 @@ export function botStep(app: AppState, rand: () => number = Math.random): AppSta
   return applyAction(app, bot.chooseAction(app.game, prompt, rand));
 }
 
-/** Paths the current human player could take that end on this square. */
+/** Paths the player at this screen could take that end on this square. */
 export function routesTo(app: AppState, square: SquareId): SquareId[][] {
   const prompt = currentPrompt(app);
-  if (!prompt || !isHuman(app, prompt.player) || app.game.phase.kind !== 'move') return [];
+  if (!prompt || !canAct(app, prompt.player) || app.game.phase.kind !== 'move') return [];
   return prompt.choices.flatMap((c) => (c.type === 'move' && c.path[c.path.length - 1] === square ? [c.path] : []));
 }
 
-/** Board click: moves there if it's a destination with one route, otherwise shows the square's details. */
-export function clickSquare(app: AppState, square: SquareId): AppState {
+export type SquareClick =
+  | { kind: 'move'; path: SquareId[] }
+  | { kind: 'select'; selected: SquareId | null; routeFor: SquareId | null };
+
+/** What a board click means: move there (one route), ask which route (several), or show the square's details. */
+export function resolveSquareClick(app: AppState, square: SquareId): SquareClick {
   const routes = routesTo(app, square);
-  if (routes.length === 1) return applyAction({ ...app, selected: square }, { type: 'move', path: routes[0] });
-  if (routes.length > 1) return { ...app, selected: square, routeFor: square };
-  return { ...app, selected: app.selected === square ? null : square };
+  if (routes.length === 1) return { kind: 'move', path: routes[0] };
+  if (routes.length > 1) return { kind: 'select', selected: square, routeFor: square };
+  return { kind: 'select', selected: app.selected === square ? null : square, routeFor: null };
+}
+
+/** Local play: handle a board click right away. */
+export function clickSquare(app: AppState, square: SquareId): AppState {
+  const click = resolveSquareClick(app, square);
+  if (click.kind === 'move') return applyAction({ ...app, selected: square }, { type: 'move', path: click.path });
+  return { ...app, selected: click.selected, routeFor: click.routeFor };
 }
 
 // ---------- Saving (the game survives page reloads) ----------
@@ -154,7 +175,7 @@ export function fromSave(text: string | null): AppState | null {
   try {
     const save = JSON.parse(text) as SaveFile;
     if (save.version !== 1 || !save.game?.players || save.seats?.length !== save.game.players.length) return null;
-    const app: AppState = { seats: save.seats, game: save.game, log: save.log ?? [], selected: null, routeFor: null, error: null };
+    const app: AppState = { seats: save.seats, game: save.game, log: save.log ?? [], selected: null, routeFor: null, error: null, viewer: null };
     currentPrompt(app); // throws if the save doesn't fit this version of the game
     return app;
   } catch {

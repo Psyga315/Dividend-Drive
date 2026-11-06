@@ -9,9 +9,24 @@ export function esc(text: string | number): string {
 /** Commands handled by the UI itself rather than the rules engine. */
 export type UiCommand =
   | { cmd: 'square'; square: SquareId } // clicked a board square
-  | { cmd: 'start' } // setup screen: start the game
-  | { cmd: 'newGame' } // game screen: back to setup
-  | { cmd: 'dismissError' };
+  | { cmd: 'start' } // local setup screen: start the game
+  | { cmd: 'newGame' } // local game: back to setup
+  | { cmd: 'dismissError' }
+  // online play
+  | { cmd: 'goOnline' }
+  | { cmd: 'goLocal' }
+  | { cmd: 'createRoom' }
+  | { cmd: 'joinRoom' }
+  | { cmd: 'rejoin' } // reconnect to the room saved in this browser
+  | { cmd: 'forgetRoom' }
+  | { cmd: 'copyInvite' }
+  | { cmd: 'leaveRoom' } // lobby: give up your seat
+  | { cmd: 'exitGame' } // during a game: disconnect (you can rejoin later)
+  | { cmd: 'addBot' } // bot type comes from the #bot-kind dropdown
+  | { cmd: 'removeSeat'; seat: number }
+  | { cmd: 'startOnline' }
+  | { cmd: 'standIn'; seat: number }
+  | { cmd: 'backToLobby' };
 
 /** Field that a number input fills in, for actions with an amount. */
 export type AmountField = 'qty' | 'amount';
